@@ -4,7 +4,7 @@
 {-# LANGUAGE OverloadedStrings #-}
 
 module Auction.Trace
-    (startTest, bidTest, closeTest, test) where
+    (startTest, bidTest, closeTest, test,testTime) where
 
 
 import Plutus.Trace.Emulator as Emulator
@@ -26,6 +26,8 @@ import           Utility (wallet, polT)
 
 nftEx1 :: StartParams
 nftEx1 = StartParams { spDeadline = testTime, spMinBid = 10_000_000, spCurrency = polT, spToken = "Test1"}
+
+--Interval {ivFrom = LowerBound (Finite (POSIXTime {getPOSIXTime = 1596059101999})) True, ivTo = UpperBound PosInf True}
 
 nftExBid1 :: BidParams
 nftExBid1 = BidParams { bpCurrency = polT, bpToken = "Test1", bpBid = 11_000_000}
@@ -71,11 +73,8 @@ closeTest :: IO ()
 closeTest =  
     runEmulatorTraceIO' def emCfg $ do 
         h4 <- activateContractWallet (wallet 4) endpoints
-        h5 <- activateContractWallet (wallet 5) endpoints
         void $ Emulator.waitNSlots 1 
         callEndpoint @"start" h4 nftEx1 
-        void $ Emulator.waitNSlots 1
-        callEndpoint @"bid" h5 nftExBid1
         void $ Emulator.waitNSlots 10
         callEndpoint @"close" h4 nftExClose1
         void $ Emulator.waitNSlots 1

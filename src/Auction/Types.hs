@@ -8,7 +8,19 @@
 {-# LANGUAGE TypeFamilies          #-}
 {-# LANGUAGE TypeApplications      #-}
 
-module Auction.Types (Auction (..), Bid (..), AuctionDatum (..), AuctionAction (..), Auctioning, StartParams (..), BidParams (..), CloseParams (..), Datum (..), AuctionSchema) where 
+module Auction.Types 
+    (Auction (..)
+    , Bid (..)
+    , AuctionDatum (..)
+    , AuctionAction (..)
+    , Auctioning
+    , StartParams (..)
+    , BidParams (..)
+    , CloseParams (..)
+    , Datum (..)
+    , AuctionSchema
+    , FeePayment (..)
+    ) where 
 
 import           Data.Aeson                (ToJSON, FromJSON)
 import           GHC.Generics              (Generic)
@@ -18,17 +30,20 @@ import qualified Prelude                   as Pr
 import           Schema                    (ToSchema)
 import qualified PlutusTx
 import           PlutusTx.Prelude          as Plutus ( Eq(..), (&&), Integer)
-import           Ledger                    ( TokenName, CurrencySymbol, PubKeyHash, POSIXTime)
+import           Ledger                    ( TokenName, CurrencySymbol, PaymentPubKeyHash, POSIXTime)
 import           Ledger.Scripts            as Scripts
 import           Ledger.Typed.Scripts      as Scripts hiding (validatorHash)
 import           Plutus.Contract           ( Endpoint, type (.\/) )
-import           Playground.TH             ( mkSchemaDefinitions )
 
+data FeePayment = FeePayment 
+    { aOwner1Pkh :: !PaymentPubKeyHash
+    , aOwner2Pkh :: !PaymentPubKeyHash
+    } deriving (Pr.Eq, Pr.Ord, Show, Generic, ToJSON, FromJSON, ToSchema)
+
+PlutusTx.makeLift ''FeePayment
 
 data Auction = Auction
-    { aSeller          :: !PubKeyHash
-    , aOwner1Pkh       :: !PubKeyHash
-    , aOwner2Pkh       :: !PubKeyHash
+    { aSeller          :: !PaymentPubKeyHash
     , aDeadline        :: !POSIXTime
     , aMinBid          :: !Integer
     , aPolicy          :: !CurrencySymbol
@@ -38,8 +53,6 @@ data Auction = Auction
 instance Eq Auction where
     {-# INLINABLE (==) #-}
     a == b = (aSeller       a == aSeller       b) &&
-             (aOwner1Pkh    a == aOwner1Pkh    b) &&
-             (aOwner2Pkh    a == aOwner2Pkh    b) &&
              (aDeadline     a == aDeadline     b) &&
              (aMinBid       a == aMinBid       b) &&
              (aPolicy       a == aPolicy       b) &&
@@ -49,7 +62,7 @@ PlutusTx.unstableMakeIsData ''Auction
 PlutusTx.makeLift ''Auction
 
 data Bid = Bid
-    { bBidder :: !PubKeyHash
+    { bBidder :: !PaymentPubKeyHash
     , bBid    :: !Integer
     } deriving Show
 
@@ -81,8 +94,6 @@ instance Scripts.ValidatorTypes Auctioning where
     type instance DatumType Auctioning = AuctionDatum
 
 --Offchain 
-
-
 data StartParams = StartParams
     { spDeadline :: !POSIXTime
     , spMinBid   :: !Integer
@@ -107,5 +118,4 @@ type AuctionSchema =
         .\/ Endpoint "close" CloseParams
 
 
-mkSchemaDefinitions ''AuctionSchema
 

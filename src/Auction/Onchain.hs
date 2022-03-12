@@ -19,6 +19,7 @@
 
 module Auction.Onchain where
 
+import           PlutusTx.Ratio           ((%))
 import           Codec.Serialise          (serialise)
 import           Cardano.Api.Shelley      (PlutusScript (..), PlutusScriptV1)
 import qualified Data.ByteString.Lazy     as LB
@@ -34,7 +35,7 @@ import qualified PlutusTx                 as PlutusTx
 import           PlutusTx.Prelude         hiding (Semigroup(..), unless)
 import qualified PlutusTx.Prelude         as Plutus
 import           Plutus.ChainIndex.Tx     (ChainIndexTx (..))
-import           Ledger                   hiding (singleton)
+import           Ledger                   hiding (singleton, fee)
 import           Ledger.Constraints       as Constraints
 import qualified Ledger.Scripts           as Scripts
 import qualified Ledger.Typed.Scripts     as Scripts hiding (validatorHash)
@@ -48,8 +49,10 @@ import           Schema                   (ToSchema)
 import           Text.Printf              (printf)
 import qualified Plutus.V1.Ledger.Scripts as Plutus
 
-import           Auction.Types            (Auction (..), Bid (..), AuctionDatum (..), AuctionAction (..), Auctioning)
+import           Auction.Types            (Auction (..), Bid (..), AuctionAction (..), Auctioning, FeePayment (..), AuctionDatum (..))
 
+minLovelace :: Integer
+minLovelace = 2000000
 
 {-# INLINABLE minBid #-}
 minBid :: AuctionDatum -> Integer
@@ -58,8 +61,8 @@ minBid AuctionDatum{..} = case adHighestBid of
     Just Bid{..} -> bBid + 1
 
 {-# INLINABLE mkAuctionValidator #-}
-mkAuctionValidator :: AuctionDatum -> AuctionAction -> ScriptContext -> Bool
-mkAuctionValidator ad redeemer ctx =
+mkAuctionValidator :: FeePayment -> AuctionDatum -> AuctionAction -> ScriptContext -> Bool
+mkAuctionValidator fee ad redeemer ctx =
     traceIfFalse "wrong input value" correctInputValue &&
     case redeemer of
         MkBid b@Bid{..} ->
@@ -71,14 +74,15 @@ mkAuctionValidator ad redeemer ctx =
         Close           ->
             traceIfFalse "too early" correctCloseSlotRange &&
             case adHighestBid ad of
-                Nothing      ->
-                    traceIfFalse "expected seller to get token" (getsValue (aSeller auction) tokenValue)
+                Nothing      -> 
+                    traceIfFalse "expected seller to get token" (getsValue seller $ tokenValue <> Ada.lovelaceValueOf minLovelace)
                 Just Bid{..} ->
-                    traceIfFalse "expected highest bidder to get token" (getsValue bBidder tokenValue) &&
+                    traceIfFalse "expected highest bidder to get token" (getsValue bBidder $ tokenValue <> Ada.lovelaceValueOf minLovelace) &&
                     traceIfFalse "expected seller to get highest bid" (getsValue (aSeller auction) $ Ada.lovelaceValueOf bBid) &&
                     traceIfFalse "Fee not paid" (checkFee bBid)
 
   where
+
     info :: TxInfo
     info = scriptContextTxInfo ctx
     
@@ -99,14 +103,17 @@ mkAuctionValidator ad redeemer ctx =
 
     auction :: Auction
     auction = adAuction ad
+    
+    seller :: PaymentPubKeyHash
+    seller = aSeller auction 
 
     tokenValue :: Value
     tokenValue = Value.singleton (aPolicy auction) (aTokenName auction) 1
 
     correctInputValue :: Bool
     correctInputValue = inVal == case adHighestBid ad of
-        Nothing      -> tokenValue
-        Just Bid{..} -> tokenValue Plutus.<> Ada.lovelaceValueOf bBid
+        Nothing      -> tokenValue Plutus.<> Ada.lovelaceValueOf minLovelace
+        Just Bid{..} -> tokenValue Plutus.<> Ada.lovelaceValueOf (minLovelace + bBid)
 
     sufficientBid :: Integer -> Bool
     sufficientBid amount = amount >= minBid ad
@@ -129,7 +136,7 @@ mkAuctionValidator ad redeemer ctx =
 
     correctBidOutputValue :: Integer -> Bool
     correctBidOutputValue amount =
-        txOutValue ownOutput == tokenValue Plutus.<> Ada.lovelaceValueOf amount
+        txOutValue ownOutput == tokenValue Plutus.<> Ada.lovelaceValueOf (amount + minLovelace)
 
     correctBidRefund :: Bool
     correctBidRefund = case adHighestBid ad of
@@ -138,7 +145,7 @@ mkAuctionValidator ad redeemer ctx =
           let
             os = [ o
                  | o <- txInfoOutputs info
-                 , txOutAddress o == pubKeyHashAddress bBidder
+                 , txOutAddress o == pubKeyHashAddress bBidder Nothing
                  ]
           in
             case os of
@@ -146,12 +153,12 @@ mkAuctionValidator ad redeemer ctx =
                 _   -> traceError "expected exactly one refund output"
 
     correctBidSlotRange :: Bool
-    correctBidSlotRange = to (aDeadline auction) `contains` txInfoValidRange info
+    correctBidSlotRange = contains (to $ aDeadline auction) $ txInfoValidRange info
 
     correctCloseSlotRange :: Bool
-    correctCloseSlotRange = from (aDeadline auction) `contains` txInfoValidRange info
+    correctCloseSlotRange = contains (from $ aDeadline auction) $ txInfoValidRange info
 
-    getsValue :: PubKeyHash -> Value -> Bool
+    getsValue :: PaymentPubKeyHash -> Value -> Bool
     getsValue h v =
       let
         [o] = [ o'
@@ -159,32 +166,32 @@ mkAuctionValidator ad redeemer ctx =
               , txOutValue o' == v
               ]
       in
-        txOutAddress o == pubKeyHashAddress h
+        txOutAddress o == pubKeyHashAddress h Nothing
 
     checkFee :: Integer -> Bool
-    checkFee price = fromInteger (Ada.getLovelace (Ada.fromValue (valuePaidTo info (aOwner1Pkh auction)))) >= 2 % 100 * fromInteger price &&
-               fromInteger (Ada.getLovelace (Ada.fromValue (valuePaidTo info (aOwner2Pkh auction)))) >= 2 % 100 * fromInteger price 
+    checkFee price = fromInteger (Ada.getLovelace (Ada.fromValue (valuePaidTo info (unPaymentPubKeyHash $ aOwner1Pkh fee)))) >= 2 % 100 * fromInteger price &&
+               fromInteger (Ada.getLovelace (Ada.fromValue (valuePaidTo info (unPaymentPubKeyHash $ aOwner2Pkh fee)))) >= 2 % 100 * fromInteger price 
 
 
 
-auctionTypedValidator :: Scripts.TypedValidator Auctioning
-auctionTypedValidator = Scripts.mkTypedValidator @Auctioning
-    $$(PlutusTx.compile [|| mkAuctionValidator ||])
+auctionTypedValidator :: FeePayment -> Scripts.TypedValidator Auctioning
+auctionTypedValidator fee = Scripts.mkTypedValidator @Auctioning
+    ($$(PlutusTx.compile [|| mkAuctionValidator ||]) `PlutusTx.applyCode` PlutusTx.liftCode fee)
     $$(PlutusTx.compile [|| wrap ||])
   where
-    wrap = Scripts.wrapValidator
+    wrap = Scripts.wrapValidator @AuctionDatum @AuctionAction
 
-auctionValidator :: Validator
-auctionValidator = Scripts.validatorScript auctionTypedValidator
+auctionValidator :: FeePayment -> Validator
+auctionValidator = Scripts.validatorScript . auctionTypedValidator
 
-auctionAddress :: Ledger.ValidatorHash
-auctionAddress = Scripts.validatorHash auctionValidator
+auctionAddress :: FeePayment -> Ledger.ValidatorHash
+auctionAddress = Scripts.validatorHash . auctionValidator
 
-auctionScript :: Plutus.Script
-auctionScript = Ledger.unValidatorScript auctionValidator
+auctionScript :: FeePayment -> Plutus.Script
+auctionScript = Ledger.unValidatorScript . auctionValidator
 
-auctionScriptAsShortBs :: SBS.ShortByteString
-auctionScriptAsShortBs = SBS.toShort . LB.toStrict . serialise $ auctionScript
+auctionScriptAsShortBs :: FeePayment -> SBS.ShortByteString
+auctionScriptAsShortBs = SBS.toShort . LB.toStrict . serialise . auctionScript
 
-apiAuctionScript :: PlutusScript PlutusScriptV1
-apiAuctionScript = PlutusScriptSerialised auctionScriptAsShortBs
+apiAuctionScript :: FeePayment -> PlutusScript PlutusScriptV1
+apiAuctionScript = PlutusScriptSerialised . auctionScriptAsShortBs

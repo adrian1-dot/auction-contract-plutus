@@ -23,7 +23,7 @@ import           Prelude                   (String, fromIntegral, ceiling, Float
 
 
 import           Plutus.Contract          as Contract (AsContractError, logInfo, throwError, awaitTxConfirmed, endpoint, submitTxConstraintsWith,
-                                          utxosTxOutTxAt, select, Contract, Promise(awaitPromise), ownPubKeyHash, submitTxConstraints)
+                                          utxosTxOutTxAt, select, Contract, Promise(awaitPromise), ownPaymentPubKeyHash, submitTxConstraints)
 import qualified PlutusTx
 import           PlutusTx.Prelude         as Plutus  hiding (Semigroup (..), unless)
 import           Ledger                   (scriptAddress, to, from, txOutDatumHash, CurrencySymbol, TokenName, Redeemer(Redeemer),
@@ -38,15 +38,14 @@ import           Auction.Types            (StartParams (..), BidParams (..), Clo
 import           Text.Printf              (printf)
 
 import           Auction.Onchain 
-import           Utility                  (owner1pkh, owner2pkh)
+import           Utility                  (feePayment)
+import           Auction.Types            (FeePayment (..))
 
 start :: AsContractError e => StartParams -> Contract w s e ()
 start StartParams{..} = do
-    pkh <- Contract.ownPubKeyHash
+    pkh <- Contract.ownPaymentPubKeyHash
     let a = Auction
                 { aSeller       = pkh
-                , aOwner1Pkh    = owner1pkh
-                , aOwner2Pkh    = owner2pkh
                 , aDeadline     = spDeadline
                 , aMinBid       = spMinBid
                 , aPolicy       = spCurrency
@@ -56,9 +55,9 @@ start StartParams{..} = do
                 { adAuction    = a
                 , adHighestBid = Nothing
                 }
-        v = Value.singleton spCurrency spToken 1
+        v = Value.singleton spCurrency spToken 1 <> Ada.lovelaceValueOf 2000000
         tx = mustPayToTheScript d v
-    ledgerTx <- submitTxConstraints auctionTypedValidator tx
+    ledgerTx <- submitTxConstraints (auctionTypedValidator feePayment) tx
     void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
     logInfo @String $ printf "started auction %s for token %s" (show a) (show v)
 
@@ -69,23 +68,24 @@ bid BidParams{..} = do
 
     when (bpBid < minBid d) $
         throwError $ pack $ printf "bid lower than minimal bid %d" (minBid d)
-    pkh <- Contract.ownPubKeyHash
+    pkh <- Contract.ownPaymentPubKeyHash
     let b  = Bid {bBidder = pkh, bBid = bpBid}
         d' = d {adHighestBid = Just b}
-        v  = Value.singleton bpCurrency bpToken 1 <> Ada.lovelaceValueOf bpBid
+        v  = Value.singleton bpCurrency bpToken 1 <> Ada.lovelaceValueOf (2000000 + bpBid)
         r  = Redeemer $ PlutusTx.toBuiltinData $ MkBid b
 
-        lookups = Constraints.typedValidatorLookups auctionTypedValidator <>
-                  Constraints.otherScript auctionValidator                <>
+        lookups = Constraints.typedValidatorLookups (auctionTypedValidator feePayment) <>
+                  Constraints.otherScript (auctionValidator feePayment)                <>
                   Constraints.unspentOutputs (Map.singleton oref o)
-        tx      = case adHighestBid of
-                    Nothing      -> mustPayToTheScript d' v                            <>
+    let tx = case adHighestBid of
+                    Nothing      -> mustPayToTheScript d' v    <>
                                     mustValidateIn (to $ aDeadline adAuction)          <>
                                     mustSpendScriptOutput oref r
                     Just Bid{..} -> mustPayToTheScript d' v                            <>
                                     mustPayToPubKey bBidder (Ada.lovelaceValueOf bBid) <>
                                     mustValidateIn (to $ aDeadline adAuction)          <>
                                     mustSpendScriptOutput oref r
+    logInfo @String $ "datum " <> show d'
     ledgerTx <- submitTxConstraintsWith lookups tx
     void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
     logInfo @String $ printf "made bid of %d lovelace in auction %s for token (%s, %s)"
@@ -98,37 +98,43 @@ close :: forall w s. CloseParams -> Contract w s Text ()
 close CloseParams{..} = do
     (oref, o, d@AuctionDatum{..}) <- findAuction cpCurrency cpToken
     logInfo @String $ printf "found auction utxo with datum %s" (show d)
-    let t      = Value.singleton cpCurrency cpToken 1
+    let t      = Value.singleton cpCurrency cpToken 1 
         r      = Redeemer $ PlutusTx.toBuiltinData Close
         seller = aSeller adAuction
-        lookups = Constraints.typedValidatorLookups auctionTypedValidator <>
-                  Constraints.otherScript auctionValidator                <>
+        lookups = Constraints.typedValidatorLookups (auctionTypedValidator feePayment) <>
+                  Constraints.otherScript (auctionValidator feePayment)                <>
                   Constraints.unspentOutputs (Map.singleton oref o)
     case adHighestBid of
         Nothing      -> do 
-                let tx = mustPayToPubKey seller t                          <>
+                let tx = mustPayToPubKey seller (t <> Ada.lovelaceValueOf 2000000)           <>
                          mustValidateIn (from $ aDeadline adAuction)       <>
                          mustSpendScriptOutput oref r
                 ledgerTx <- submitTxConstraintsWith lookups tx
                 void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
+                logInfo @String $ "dead: " <> show (from $ aDeadline adAuction)
         Just Bid{..} -> do
-                let valAdaF = Ada.lovelaceValueOf (ceiling (0.02 Prelude.* fromIntegral bBid :: Float))    
-                    tx      = mustPayToPubKey bBidder t                         <>
+                let valAdaF = Ada.lovelaceValueOf $ minV (ceiling (0.02 Prelude.* fromIntegral bBid :: Float))    
+                    tx      = mustPayToPubKey bBidder (t <> Ada.lovelaceValueOf 2000000)  <>
                               mustPayToPubKey seller (Ada.lovelaceValueOf bBid) <>
-                              mustPayToPubKey owner1pkh valAdaF               <>
-                              mustPayToPubKey owner2pkh valAdaF               <>
+                              mustPayToPubKey (aOwner1Pkh feePayment) valAdaF               <>
+                              mustPayToPubKey (aOwner2Pkh feePayment) valAdaF               <>
                               mustValidateIn (from $ aDeadline adAuction)       <>
                               mustSpendScriptOutput oref r
                 ledgerTx <- submitTxConstraintsWith lookups tx
+                logInfo @String $ "valAdaF: " <> show valAdaF
                 void $ awaitTxConfirmed $ getCardanoTxId ledgerTx
     logInfo @String $ printf "closed auction %s for token (%s, %s)"
         (show adAuction)
         (show cpCurrency)
         (show cpToken)
 
+
+minV :: Integer -> Integer 
+minV i = if ( i > 2000000 ) then i else 2000000
+
 findAuction :: CurrencySymbol -> TokenName -> Contract w s Text (TxOutRef, ChainIndexTxOut, AuctionDatum)
 findAuction cs tn = do
-    utxos <- utxosTxOutTxAt $ scriptAddress auctionValidator
+    utxos <- utxosTxOutTxAt $ scriptAddress (auctionValidator feePayment)
     let xs = [ (oref, (utxo, tx))
              | (oref, (utxo, tx)) <- Map.toList utxos
              , Value.valueOf (_ciTxOutValue utxo) cs tn == 1

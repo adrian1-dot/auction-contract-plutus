@@ -2,41 +2,52 @@
 
 module Utility
     ( wallet
-    , owner2pkh
-    , owner1pkh
+    , feePayment
     , polT
     --testnet
-    , testnetOwner1Pkh
-    , testnetOwner2Pkh
+    , testnetFeePayment
     ) where
 
 
-import           Plutus.V1.Ledger.Crypto          (PubKeyHash)
-import           Wallet.Emulator.Wallet           (Wallet, fromWalletNumber, walletPubKeyHash)
-import           Wallet.Emulator.Types            (WalletNumber (..))
+import           Ledger                           (PaymentPubKeyHash (..))
+import           Wallet.Emulator.Wallet           (Wallet, fromWalletNumber, mockWalletPaymentPubKeyHash)
+import           Wallet.Emulator.Types            (WalletNumber (..), knownWallet)
 import           Plutus.V1.Ledger.Value           (CurrencySymbol (..))
 import           PlutusTx.Prelude                 ((.))
 import           Prelude hiding                   ((.))
 
+import           Auction.Types                    (FeePayment (..))
+
+feePayment :: FeePayment 
+feePayment = FeePayment
+    { aOwner1Pkh = owner1pkh
+    , aOwner2Pkh = owner2pkh
+    }
 
 wallet :: Integer -> Wallet
 wallet = fromWalletNumber . WalletNumber
 
-owner1pkh :: PubKeyHash
-owner1pkh = walletPubKeyHash $ wallet 1
+owner1pkh :: PaymentPubKeyHash
+owner1pkh = mockWalletPaymentPubKeyHash $ knownWallet 1
 
-owner2pkh :: PubKeyHash
-owner2pkh = walletPubKeyHash $ wallet 2
+owner2pkh :: PaymentPubKeyHash
+owner2pkh = mockWalletPaymentPubKeyHash $ knownWallet 2
 
 polT :: CurrencySymbol
 polT = CurrencySymbol "test"
 
 --testnet
-testnetOwner1Pkh :: PubKeyHash
-testnetOwner1Pkh = "3795730786fe4960e5d6750ac3e5e91350181ab874828d79ecaefc91"
+testnetFeePayment :: FeePayment
+testnetFeePayment = FeePayment
+    { aOwner1Pkh = testnetOwner1Pkh
+    , aOwner2Pkh = testnetOwner2Pkh
+    }
 
-testnetOwner2Pkh :: PubKeyHash
-testnetOwner2Pkh = "0b83b3a70145fcb7936491e8ee22bcdb8cf235be855c2f64eb016665"
+testnetOwner1Pkh :: PaymentPubKeyHash
+testnetOwner1Pkh = PaymentPubKeyHash "c994a4a7e265253f4c2383882cb1eac08fbf0c1a1bbff7f5a00996b5"
+
+testnetOwner2Pkh :: PaymentPubKeyHash
+testnetOwner2Pkh = PaymentPubKeyHash "f156560859c7cc4c5c68de5003c7bb36276007c75155c924d274b611"
 
 
 

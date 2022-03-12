@@ -1,5 +1,5 @@
 cabal-version:      2.4
-name:               auction-plutus
+name:               auction
 version:            0.1.0.0
 
 -- A short (one-line) description of the package.
@@ -13,7 +13,7 @@ version:            0.1.0.0
 
 license: Apache-2.0
 license-files: LICENSE
-author:             Adrian 
+author:             https://discord.com/channels/@adrian.#4706
 
 -- A copyright notice.
 -- copyright:
@@ -64,27 +64,11 @@ library
       plutus-chain-index,
       data-default,
       plutus-use-cases,
-      tasty
+      tasty,
+      plutus-ledger-constraints,
+      plutus-chain-index-core
     hs-source-dirs: src src/Market src/Auction
 
-executable auction-contract-pab
-  import: lang
-  main-is: Main.hs
-  hs-source-dirs: pab
-  ghc-options:
-    -threaded
-  build-depends:
-    base >= 4.9 && < 5,
-    data-default -any,
-    plutus-contract -any,
-    plutus-pab -any,
-    auction-plutus -any,
-    aeson -any,
-    freer-simple -any,
-    prettyprinter -any,
-    freer-extras -any,
-    plutus-ledger -any,
-    openapi3 -any,
 
 executable auction-plutus
   hs-source-dirs:       app
@@ -92,7 +76,7 @@ executable auction-plutus
   ghc-options:          -threaded -rtsopts "-with-rtsopts=-T"
 
   build-depends:        cardano-api
-                      , auction-plutus 
+                      , auction
                       , plutus-ledger-api
                       , bytestring
                       , cardano-ledger-alonzo
@@ -104,11 +88,25 @@ executable datum-json
   main-is:              datum-json.hs
   ghc-options:          -threaded -rtsopts "-with-rtsopts=-T"
 
-  build-depends:        auction-plutus
+  build-depends:        auction
                       , bytestring
                       , cardano-api
                       , plutus-tx
                       , aeson
                       , base 
                       , plutus-ledger-api
+                      , plutus-ledger
 
+executable datum-bid-json
+  hs-source-dirs:       app
+  main-is:              datum-bid-json.hs
+  ghc-options:          -threaded -rtsopts "-with-rtsopts=-T"
+
+  build-depends:        auction
+                      , bytestring
+                      , cardano-api
+                      , plutus-tx
+                      , aeson
+                      , base 
+                      , plutus-ledger-api
+                      , plutus-ledger
